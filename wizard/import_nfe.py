@@ -1,8 +1,5 @@
 import base64
-
 from lxml import objectify
-from dateutil import parser
-from random import SystemRandom
 from datetime import datetime
 import logging
 from odoo import api, models, fields
@@ -44,10 +41,6 @@ class WizardImportNfe(models.TransientModel):
         nfe_string = base64.b64decode(self.nfe_xml)
         nfe = objectify.fromstring(nfe_string)
 
-        # Variaveis uteis
-        items = []
-        cont = 1
-
         # Carregando fornecedor / Criando
         partner = self.get_partner(emit=nfe.NFe.infNFe.emit)
 
@@ -78,19 +71,31 @@ class WizardImportNfe(models.TransientModel):
         )
         nota = self.env['purchase.order'].create(nota_dict)
 
+        # Cria os itens na nota
+        items = self.purchase_order_line(nota, nfe.NFe.infNFe.det)
+
+        # Vamos alterar inserir os itens criados na nota
+        nota_dict = {'order_line': items}
+        nota.write(nota_dict)
+        nota._compute_tax_id()
+
+    def purchase_order_line(self, order, itens):
+        # Variaveis uteis
+        items = []
+        cont = 1
+
         # Criando produtos na nota
         for produto in self.wizard_produtos:
-            for prod in nfe.NFe.infNFe.det:
-                prod = prod.prod
-                if produto.name == prod.xProd:
+            for prod in itens:
+                if produto.name == prod.prod.xProd:
                     # Verificando se o produto tem fator de conversão
                     if produto.fator > 0:
                         # Aplicando fator de conversão
-                        quantidade = prod.qCom * produto.fator
-                        preco_unitario = prod.vProd / quantidade
+                        quantidade = prod.prod.qCom * produto.fator
+                        preco_unitario = prod.prod.vProd / quantidade
                     else:
-                        quantidade = prod.qCom
-                        preco_unitario = prod.vUnCom
+                        quantidade = prod.prod.qCom
+                        preco_unitario = prod.prod.vUnCom
 
                     # Verificando se a unidade medida externa foi informada
                     if not produto.uom_ext:
@@ -99,40 +104,58 @@ class WizardImportNfe(models.TransientModel):
                     # Verificando se o produto foi relacionado
                     if not produto.product_id:
                         # Cadastrando produto
-                        produto.product_id = self.cadastro_de_produto(produto, prod, preco_unitario)
+                        produto.product_id = self.cadastro_de_produto(produto, prod.prod, preco_unitario)
 
                     # Pesquisando relacionamentos do produto
                     product_code = self.env['product.supplierinfo'].search([
-                        ('product_code', '=', prod.cProd.text),
-                        ('name', '=', partner.id)
+                        ('product_code', '=', prod.prod.cProd.text),
+                        ('name', '=', order.partner_id.id)
                     ], limit=1)
 
                     # Verificando se o produto ja possui algum relacionamento com o fornecedor
                     if not product_code:
                         # Cadastrando relacionamento
-                        self.relacionamento_produto_fornecedor(partner, produto, prod)
+                        self.relacionamento_produto_fornecedor(order.partner_id, produto, prod.prod)
 
-                    purchase_order_line = self.env['purchase.order.line'].create({
+                    # Pesquisando cfop da nota
+                    cfop = self.env['br_account.cfop'].search([
+                        ('code', '=', prod.prod.CFOP)], limit=1)
+                    if not cfop:
+                        raise UserError("CFOP Não escontrado, favor verificar")
+
+                    if prod.imposto.ICMS.getchildren()[0].tag[0:6] == 'ICMSSN':
+                        pass
+                    elif prod.imposto.ICMS.getchildren()[0].tag[0:6] == 'ICMS':
+                        pass
+                    else:
+                        raise UserError("Desculpe, mas esse XML não tem a tag de ICMS definida corretamente")
+
+                    purchase_order_line_dict = {
                         'product_id': produto.product_id.id,
                         'name': prod.xProd,
-                        'date_planned': self.retorna_data(nfe.NFe.infNFe.ide.dhEmi),
+                        'date_planned': order.date_approve,
                         'product_qty': quantidade,
                         'price_unit': preco_unitario,
                         'product_uom': produto.uom_int.id,
-                        'order_id': nota.id,
-                        'partner_id': partner.id,
+                        'order_id': order.id,
+                        'partner_id': order.partner_id.id,
                         'product_qty_xml': float(quantidade),
                         'product_uom_xml': produto.uom_ext.id,
+                        'valor_desconto': prod.vDesc,
+                        'cfop_id': cfop.id,
                         'num_item_xml': cont
-                    })
+                    }
+                    if hasattr(prod.imposto.ICMS.getchildren()[0], 'CSOSN'):
+                        purchase_order_line_dict['icms_csosn_simples'] = prod.imposto.ICMS.getchildren()[0].CSOSN
+
+                    if hasattr(prod.imposto.ICMS.getchildren()[0], 'CST'):
+                        purchase_order_line_dict['icms_cst_normal'] = prod.imposto.ICMS.getchildren()[0].CST
+
+                    purchase_order_line = self.env['purchase.order.line'].create(purchase_order_line_dict)
                     cont += 1
 
                 items.append((4, purchase_order_line.id, False))
-
-        nota_dict = {'order_line': items}
-        nota.write(nota_dict)
-        nota._compute_tax_id()
-
+        return items
 
     @staticmethod
     def arruma_cpf_cnpj(partner_doc):
