@@ -77,10 +77,21 @@ class WizardImportNfe(models.TransientModel):
             picking_count=1,
         )
         nota = self.env['purchase.order'].create(nota_dict)
+
+        # Criando produtos na nota
         for produto in self.wizard_produtos:
             for prod in nfe.NFe.infNFe.det:
                 prod = prod.prod
                 if produto.name == prod.xProd:
+                    # Verificando se o produto tem fator de conversão
+                    if produto.fator > 0:
+                        # Aplicando fator de conversão
+                        quantidade = prod.qCom * produto.fator
+                        preco_unitario = prod.vProd / quantidade
+                    else:
+                        quantidade = prod.qCom
+                        preco_unitario = prod.vUnCom
+
                     # Verificando se a unidade medida externa foi informada
                     if not produto.uom_ext:
                         raise UserError('A unidade medida do XML do produto: ' + produto.name + ' é obrigatoria')
@@ -88,7 +99,7 @@ class WizardImportNfe(models.TransientModel):
                     # Verificando se o produto foi relacionado
                     if not produto.product_id:
                         # Cadastrando produto
-                        produto.product_id = self.cadastro_de_produto(produto, prod)
+                        produto.product_id = self.cadastro_de_produto(produto, prod, preco_unitario)
 
                     # Pesquisando relacionamentos do produto
                     product_code = self.env['product.supplierinfo'].search([
@@ -100,15 +111,6 @@ class WizardImportNfe(models.TransientModel):
                     if not product_code:
                         # Cadastrando relacionamento
                         self.relacionamento_produto_fornecedor(partner, produto, prod)
-
-                    # Verificando se o produto tem fator de conversão
-                    if produto.fator > 0:
-                        # Aplicando fator de conversão
-                        quantidade = prod.qCom * produto.fator
-                        preco_unitario = prod.vProd / quantidade
-                    else:
-                        quantidade = prod.qCom
-                        preco_unitario = prod.vUnCom
 
                     purchase_order_line = self.env['purchase.order.line'].create({
                         'product_id': produto.product_id.id,
@@ -151,27 +153,29 @@ class WizardImportNfe(models.TransientModel):
                                            partner_doc[9:11])
         return partner_doc
 
-    def cadastro_de_produto(self, produto_wizard, produto_xml):
+    def cadastro_de_produto(self, produto_wizard, produto_xml, preco_unitario):
         vals = {
             'name': produto_xml.xProd.text,
-            'default_code': produto_xml.cProd.text
+            'default_code': produto_xml.cProd.text,
+            'type': 'product',
+            'list_price': preco_unitario,
+            'purchase_method': 'receive'
         }
-        pf_ids = self.env['product.fiscal.classification'].search([('code', '=', produto_xml.NCM)])
+
         if produto_wizard.uom_int:
             vals['product_uom_xml_id'] = produto_wizard.uom_int.id
         else:
             raise UserError('A unidade medida interna do produto: ' + produto_wizard.name + ' é obrigatoria')
 
-        vals['type'] = 'product'
-        vals['list_price'] = float(produto_xml.vUnCom)
-        vals['purchase_method'] = 'receive'
-        vals['cest'] = 'receive'
+        if hasattr(produto_xml, 'CEST'):
+            vals['cest'] = produto_xml.CEST
 
-        if hasattr(produto_xml.xProd, 'rastro'):
+        if hasattr(produto_xml, 'rastro'):
             vals['tracking'] = 'lot'
         else:
             vals['tracking'] = 'none'
 
+        pf_ids = self.env['product.fiscal.classification'].search([('code', '=', produto_xml.NCM)])
         vals['fiscal_classification_id'] = pf_ids.id
         product_id = self.env['product.product'].create(vals)
         return product_id
@@ -256,6 +260,7 @@ class WizardImportNfe(models.TransientModel):
         partner = self.env['res.partner'].search([
             ('cnpj_cpf', '=', partner_doc)])
 
+        # Fornecedor não encontrado, então vamos criar
         if not partner:
             city = self.env['res.state.city'].search([('name', '=ilike', emit.enderEmit.xMun)])
             partner = {

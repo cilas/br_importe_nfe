@@ -1,11 +1,10 @@
 <odoo>
     <data>
         <!-- actions opening views on models -->
-        <record model="ir.actions.act_window" id="maiconkkl.list">
-            <field name="name">tree_maiconkkl</field>
+        <record model="ir.actions.act_window" id="importview">
+            <field name="name">wizard.import.nfe</field>
             <field name="res_model">wizard.import.nfe</field>
             <field name="view_mode">form</field>
-            <!--<field name="target">new</field>-->
         </record>
         <record model="ir.ui.view" id="view_wizard_import_purchase_nfe">
             <field name="name">wizard.import.nfe.form</field>
@@ -53,14 +52,16 @@
                 </form>
             </field>
         </record>
-        <!-- Top menu item -->
-        <menuitem name="maiconkkl" id="maiconkkl.menu_root"/>
-
-        <!-- menu categories -->
-        <menuitem name="Menu 1" id="maiconkkl.menu_1" parent="maiconkkl.menu_root"/>
-
+        <record id="open_wizard_xml_action_id" model="ir.actions.act_window">
+            <field name="name">Abrir wizard nfe</field>
+            <field name="type">ir.actions.act_window</field>
+            <field name="res_model">wizard.import.nfe</field>
+            <field name="view_type">form</field>
+            <field name="view_mode">form</field>
+            <field name="target">new</field>
+        </record>
         <!-- actions -->
-        <menuitem name="Listar" id="maiconkkl.menu_1_list" parent="maiconkkl.menu_1"
-                  action="maiconkkl.list"/>
+        <menuitem name="Importar NF-e" id="menu_purchase_control" parent="purchase.menu_purchase_control"
+                  action="open_wizard_xml_action_id"/>
     </data>
 </odoo>
