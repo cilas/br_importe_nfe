@@ -4,14 +4,55 @@
         <record model="ir.actions.act_window" id="maiconkkl.list">
             <field name="name">tree_maiconkkl</field>
             <field name="res_model">wizard.import.nfe</field>
-            <field name="view_type">tree</field>
-            <field name="view_mode">form,tree</field>
-            <field name="help" type="html">
-                <p class="oe_view_nocontent_create">Create the first course
-                </p>
+            <field name="view_mode">form</field>
+            <!--<field name="target">new</field>-->
+        </record>
+        <record model="ir.ui.view" id="view_wizard_import_purchase_nfe">
+            <field name="name">wizard.import.nfe.form</field>
+            <field name="model">wizard.import.nfe</field>
+            <field name="arch" type="xml">
+                <form string="Importar compra">
+                    <group>
+                        <field name="nfe_xml"/>
+                        <field name="purchase_id" attrs="{'invisible':[('confirma','!=',False)]}"/>
+                        <field name="fiscal_position_id" domain="['|', ('fiscal_type', '=', None), ('fiscal_type', '=', 'entrada')]"/>
+                        <field name="payment_term_id" />
+                        <field name="confirma" readonly="1" attrs="{'invisible': False}"/>
+                        <field name="altera" readonly="1" attrs="{'invisible': False}"/>
+                        <button name="checa_produtos" string="Checar" type="object" attrs="{'invisible':[('|')]}"/>
+                    </group>
+                    <group>
+                        <field name="wizard_produtos" mode="tree,kanban" attrs="{'invisible':[('confirma','!=',True)]}">
+                            <form string="Produtos não encontrados(deixe em branco para criar um novo)">
+                                <group>
+                                    <field name="name"/>
+                                    <field name="product_id"/>
+                                    <field name="fator"/>
+                                    <field name="uom_ext"/>
+                                    <field name="uom_int"/>
+                                </group>
+                            </form>
+                            <tree string="Produtos não encontrados(deixe em branco para criar um novo)" editable="bottom">
+                                <field name="name"/>
+                                <field name="product_id"/>
+                                <field name="fator"/>
+                                <field name="uom_ext"/>
+                                <field name="uom_int"/>
+                            </tree>
+                        </field>
+                    </group>
+                    <footer>
+                        <button name="action_import_nfe_purchase"
+                            string="Importar" type="object"
+                            class="oe_highlight" attrs="{'invisible':[('confirma','!=',True)]}" />
+                        <button name="action_edit_nfe_purchase"
+                            string="Alterar o pedido" type="object"
+                            class="oe_highlight" attrs="{'invisible':[('altera','!=',True)]}" />
+                        <button string="Cancelar" special="cancel"/>
+                    </footer>
+                </form>
             </field>
         </record>
-
         <!-- Top menu item -->
         <menuitem name="maiconkkl" id="maiconkkl.menu_root"/>
 
