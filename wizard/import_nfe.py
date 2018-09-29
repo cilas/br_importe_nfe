@@ -4,20 +4,23 @@ from datetime import datetime
 import logging
 from odoo import api, models, fields
 from odoo.exceptions import UserError
+
 _logger = logging.getLogger(__name__)
 STATE = {'edit': [('readonly', False)]}
 
 
-class WizardProdutos(models.Model):
+class WizardProdutos(models.TransientModel):
     _name = 'wizard.produtos'
 
     product_id = fields.Many2one('product.product', string="Produto do Odoo")
     name = fields.Char(string="Produto da NFe")
-    fator = fields.Float(string=u"Fator de conversão")
+    fator = fields.Many2one(
+        'fator.conversao', string=u'Fator de conversão', states=STATE)
     uom_int = fields.Many2one(
         'product.uom', string=u'Unidade Medida do Estabelicmento', states=STATE)
     uom_ext = fields.Many2one(
         'product.uom', string=u'Unidade Medida do XML', states=STATE)
+
 
 class WizardImportNfe(models.TransientModel):
     _name = 'wizard.import.nfe'
@@ -33,13 +36,15 @@ class WizardImportNfe(models.TransientModel):
     confirma = fields.Boolean(string='Confirmar')
     altera = fields.Boolean(string='Alterar')
 
-
     @api.multi
     def action_import_nfe_purchase(self):
         if not self.nfe_xml:
             raise UserError('Por favor, insira um arquivo de NFe.')
         nfe_string = base64.b64decode(self.nfe_xml)
         nfe = objectify.fromstring(nfe_string)
+
+        if not hasattr(nfe, 'NFe'):
+            raise UserError('Lamento, mas isso não é uma nota fiscal valida.')
 
         # Carregando fornecedor / Criando
         partner = self.get_partner(emit=nfe.NFe.infNFe.emit)
@@ -67,19 +72,26 @@ class WizardImportNfe(models.TransientModel):
             nfe_modelo=nfe.NFe.infNFe.ide.mod,
             nfe_chave=nfe.protNFe.infProt.chNFe,
             state='purchase',
+            total_bruto=nfe.NFe.infNFe.total.ICMSTot.vNF,
+            total_desconto=nfe.NFe.infNFe.total.ICMSTot.vDesc,
+            total_despesas=nfe.NFe.infNFe.total.ICMSTot.vOutro,
+            total_seguro=nfe.NFe.infNFe.total.ICMSTot.vSeg,
+            total_frete=nfe.NFe.infNFe.total.ICMSTot.vFrete,
             picking_count=1,
         )
         nota = self.env['purchase.order'].create(nota_dict)
 
         # Cria os itens na nota
-        items = self.purchase_order_line(nota, nfe.NFe.infNFe.det)
+        items = self.purchase_order_line(order=nota,
+                                         itens=nfe.NFe.infNFe.det,
+                                         dest=nfe.NFe.infNFe.dest)
 
         # Vamos alterar inserir os itens criados na nota
         nota_dict = {'order_line': items}
         nota.write(nota_dict)
         nota._compute_tax_id()
 
-    def purchase_order_line(self, order, itens):
+    def purchase_order_line(self, order, itens, dest):
         # Variaveis uteis
         items = []
         cont = 1
@@ -125,7 +137,7 @@ class WizardImportNfe(models.TransientModel):
 
                     purchase_order_line_dict = {
                         'product_id': produto.product_id.id,
-                        'name': prod.xProd,
+                        'name': prod.prod.xProd,
                         'date_planned': order.date_approve,
                         'product_qty': quantidade,
                         'price_unit': preco_unitario,
@@ -134,26 +146,82 @@ class WizardImportNfe(models.TransientModel):
                         'partner_id': order.partner_id.id,
                         'product_qty_xml': float(quantidade),
                         'product_uom_xml': produto.uom_ext.id,
-                        'valor_desconto': prod.vDesc,
                         'cfop_id': cfop.id,
-                        'num_item_xml': cont
+                        'valor_bruto': prod.prod.vProd,
+                        'num_item_xml': cont,
                     }
-                    if hasattr(prod.imposto.ICMS.getchildren()[0], 'CSOSN'):
-                        purchase_order_line_dict['icms_csosn_simples'] = prod.imposto.ICMS.getchildren()[0].CSOSN
 
-                    if hasattr(prod.imposto.ICMS.getchildren()[0], 'CST'):
-                        purchase_order_line_dict['icms_cst_normal'] = prod.imposto.ICMS.getchildren()[0].CST
+                    # Configurando o ICMS e suas particularidades
+                    icms = prod.imposto.ICMS.getchildren()[0]
+                    if hasattr(icms, 'CSOSN'):
+                        purchase_order_line_dict['icms_csosn_simples'] = icms.CSOSN
 
-                    if hasattr(prod.imposto.ICMS.getchildren()[0], 'pMVAST'):
-                        purchase_order_line_dict['icms_st_aliquota_mva'] = prod.imposto.ICMS.getchildren()[0].pMVAST
+                    if hasattr(icms, 'CST'):
+                        purchase_order_line_dict['icms_cst_normal'] = icms.CST
 
-                    if hasattr(prod.imposto.ICMS.getchildren()[0], 'pICMS'):
-                        purchase_order_line_dict['aliquota_icms_proprio'] = prod.imposto.ICMS.getchildren()[0].pICMS
+                    if hasattr(icms, 'pICMS'):
+                        purchase_order_line_dict['aliquota_icms_proprio'] = icms.pICMS
+
+                    if hasattr(icms, 'pMVAST'):
+                        purchase_order_line_dict['icms_st_aliquota_mva'] = icms.pMVAST
+
+                    if hasattr(icms, 'pRedBCST'):
+                        purchase_order_line_dict['icms_st_aliquota_reducao_base'] = icms.pRedBCST
+
+                    # Configurando o IPI e suas particularidades
+                    if hasattr(prod.imposto.IPI.IPINT, 'CST'):
+                        purchase_order_line_dict['ipi_cst'] = prod.imposto.IPI.IPINT.CST
+
+                    # Verificando se esse produto não vai ter ipi na base por Industrialização conforme
+                    # Constituição (art. 155, §2°, XI) e Lei Kandir (LC 87/96, art. 13, §2°)
+                    if hasattr(prod.imposto.IPI.IPINT, 'vIPI') and \
+                            hasattr(icms, 'vICMS') and \
+                            prod.imposto.IPI.IPINT.vIPI > 0 and \
+                            icms.vICMS > 0 and \
+                            dest.indIEDest == 1 and \
+                            cfop.name.count("Industrialização") > 0:
+                                purchase_order_line_dict['incluir_ipi_base'] = False
+
+                    # Verificando se esse produto não vai ter ipi na base por Comercialização conforme
+                    # Constituição (art. 155, §2°, XI) e Lei Kandir (LC 87/96, art. 13, §2°)
+                    elif hasattr(prod.imposto.IPI.IPINT, 'vIPI') and \
+                            hasattr(icms, 'vICMS') and \
+                            prod.imposto.IPI.IPINT.vIPI > 0 and \
+                            icms.vICMS > 0 and \
+                            dest.indIEDest == 1 and \
+                            cfop.name.count("Comercialização") > 0:
+                                purchase_order_line_dict['incluir_ipi_base'] = False
+
+                    # Produto vai ter a ipi na base conforme
+                    # Constituição (art. 155, §2°, XI) e Lei Kandir (LC 87/96, art. 13, §2°)
+                    else:
+                        purchase_order_line_dict['incluir_ipi_base'] = True
+
+                    # Configurando o pis
+                    if hasattr(prod.imposto.PIS.getchildren()[0], 'CST'):
+                        purchase_order_line_dict['pis_cst'] = prod.imposto.PIS.getchildren()[0].CST
+
+                    # Configurando o confins
+                    if hasattr(prod.imposto.COFINS.getchildren()[0], 'CST'):
+                        purchase_order_line_dict['cofins_cst'] = prod.imposto.COFINS.getchildren()[0].CST
+
+                    if hasattr(prod.prod, 'vDesc'):
+                        purchase_order_line_dict['valor_desconto'] = prod.prod.vDesc
+
+                    if hasattr(prod.prod, 'vSeg'):
+                        purchase_order_line_dict['valor_seguro'] = prod.prod.vSeg
+
+                    if hasattr(prod.prod, 'vOutro'):
+                        purchase_order_line_dict['outras_despesas'] = prod.prod.vOutro
+
+                    if hasattr(prod.prod, 'vFrete'):
+                        purchase_order_line_dict['valor_frete'] = prod.prod.vFrete
+
 
                     purchase_order_line = self.env['purchase.order.line'].create(purchase_order_line_dict)
+                    items.append((4, purchase_order_line.id, False))
                     cont += 1
 
-                items.append((4, purchase_order_line.id, False))
         return items
 
     @staticmethod
@@ -218,6 +286,9 @@ class WizardImportNfe(models.TransientModel):
             raise UserError('Por favor, insira um arquivo de NFe.')
         nfe_string = base64.b64decode(self.nfe_xml)
         nfe = objectify.fromstring(nfe_string)
+
+        if not hasattr(nfe, 'NFe'):
+            raise UserError('Lamento, mas isso não é uma nota fiscal valida.')
 
         items = []
         for det in nfe.NFe.infNFe.det:
