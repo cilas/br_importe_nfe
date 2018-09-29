@@ -123,13 +123,6 @@ class WizardImportNfe(models.TransientModel):
                     if not cfop:
                         raise UserError("CFOP Não escontrado, favor verificar")
 
-                    if prod.imposto.ICMS.getchildren()[0].tag[0:6] == 'ICMSSN':
-                        pass
-                    elif prod.imposto.ICMS.getchildren()[0].tag[0:6] == 'ICMS':
-                        pass
-                    else:
-                        raise UserError("Desculpe, mas esse XML não tem a tag de ICMS definida corretamente")
-
                     purchase_order_line_dict = {
                         'product_id': produto.product_id.id,
                         'name': prod.xProd,
@@ -150,6 +143,12 @@ class WizardImportNfe(models.TransientModel):
 
                     if hasattr(prod.imposto.ICMS.getchildren()[0], 'CST'):
                         purchase_order_line_dict['icms_cst_normal'] = prod.imposto.ICMS.getchildren()[0].CST
+
+                    if hasattr(prod.imposto.ICMS.getchildren()[0], 'pMVAST'):
+                        purchase_order_line_dict['icms_st_aliquota_mva'] = prod.imposto.ICMS.getchildren()[0].pMVAST
+
+                    if hasattr(prod.imposto.ICMS.getchildren()[0], 'pICMS'):
+                        purchase_order_line_dict['aliquota_icms_proprio'] = prod.imposto.ICMS.getchildren()[0].pICMS
 
                     purchase_order_line = self.env['purchase.order.line'].create(purchase_order_line_dict)
                     cont += 1
