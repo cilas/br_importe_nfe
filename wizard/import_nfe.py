@@ -46,8 +46,12 @@ class WizardImportNfe(models.TransientModel):
         if not hasattr(nfe, 'NFe'):
             raise UserError('Lamento, mas isso não é uma nota fiscal valida.')
 
+        company = self.get_partner(nfe.NFe.infNFe.dest)
+        if not company:
+            raise UserError("Essa nota não é sua ou seu emitente não esta configurado corretamente.")
+
         # Carregando fornecedor / Criando
-        partner = self.get_partner(emit=nfe.NFe.infNFe.emit)
+        partner = self.get_partner(emit=nfe.NFe.infNFe.emit, create=True, supplier=True)
 
         # Verificando se a nota ja existe no sistema
         order = self.env['purchase.order'].search([
@@ -60,6 +64,7 @@ class WizardImportNfe(models.TransientModel):
         # Criando nota no sistema
         nota_dict = dict(
             partner_id=partner.id,
+            company_id=company.id,
             date_approve=self.retorna_data(nfe.NFe.infNFe.ide.dhEmi),
             date_planned=self.retorna_data(nfe.NFe.infNFe.ide.dhEmi),
             date_order=self.retorna_data(nfe.NFe.infNFe.ide.dhEmi),
@@ -101,9 +106,12 @@ class WizardImportNfe(models.TransientModel):
             for prod in itens:
                 if produto.name == prod.prod.xProd:
                     # Verificando se o produto tem fator de conversão
-                    if produto.fator > 0:
+                    if hasattr(produto.fator, 'id'):
                         # Aplicando fator de conversão
-                        quantidade = prod.prod.qCom * produto.fator
+                        if produto.fator.tipo == '0':
+                            quantidade = prod.prod.qCom * produto.fator.valor
+                        elif produto.fator.tipo == '1':
+                            quantidade = prod.prod.qCom / produto.fator.valor
                         preco_unitario = prod.prod.vProd / quantidade
                     else:
                         quantidade = prod.prod.qCom
@@ -217,7 +225,6 @@ class WizardImportNfe(models.TransientModel):
                     if hasattr(prod.prod, 'vFrete'):
                         purchase_order_line_dict['valor_frete'] = prod.prod.vFrete
 
-
                     purchase_order_line = self.env['purchase.order.line'].create(purchase_order_line_dict)
                     items.append((4, purchase_order_line.id, False))
                     cont += 1
@@ -290,6 +297,10 @@ class WizardImportNfe(models.TransientModel):
         if not hasattr(nfe, 'NFe'):
             raise UserError('Lamento, mas isso não é uma nota fiscal valida.')
 
+        company = self.get_partner(nfe.NFe.infNFe.dest)
+        if not company:
+            raise UserError("Essa nota não é sua ou seu emitente não esta configurado corretamente.")
+
         items = []
         for det in nfe.NFe.infNFe.det:
             item = self.carrega_produtos(det, nfe)
@@ -346,46 +357,53 @@ class WizardImportNfe(models.TransientModel):
 
         return self.env['wizard.produtos'].create(product_create)
 
-    def get_partner(self, emit):
-        partner_doc = emit.CNPJ if hasattr(emit, 'CNPJ') else emit.CPF
+    def get_partner(self, partner_find, create=False, custumer=False, supplier=False):
+        partner_doc = partner_find.CNPJ if hasattr(partner_find, 'CNPJ') else partner_find.CPF
         partner_doc = str(partner_doc)
         partner_doc = self.arruma_cpf_cnpj(partner_doc)
         partner = self.env['res.partner'].search([
             ('cnpj_cpf', '=', partner_doc)])
 
-        # Fornecedor não encontrado, então vamos criar
-        if not partner:
-            city = self.env['res.state.city'].search([('name', '=ilike', emit.enderEmit.xMun)])
+        # Empresa não encontrado, devemos criar ?
+        if not partner and create:
+            # Ok, então vamos criar a empresa
+            city = self.env['res.state.city'].search([('name', '=ilike', partner_find.enderEmit.xMun)])
             partner = {
-                'name': emit.xNome,
-                'is_company': True if hasattr(emit, 'CNPJ') else False,
-                'company_type': 'company' if hasattr(emit, 'CNPJ') else 'person',
+                'name': partner_find.xNome,
+                'is_company': True if hasattr(partner_find, 'CNPJ') else False,
+                'company_type': 'company' if hasattr(partner_find, 'CNPJ') else 'person',
                 'cnpj_cpf': partner_doc,
                 'supplier': True,
             }
 
-            if hasattr(emit, 'IE') and hasattr(emit, 'CNPJ'):
-                partner['inscr_est'] = emit.IE.text
+            if custumer:
+                partner['custumer'] = True
+
+            if supplier:
+                partner['supplier'] = True
+
+            if hasattr(partner_find, 'IE') and hasattr(partner_find, 'CNPJ'):
+                partner['inscr_est'] = partner_find.IE.text
                 partner['indicador_ie_dest'] = '1'
-            elif not hasattr(emit, 'IE') and hasattr(emit, 'CNPJ'):
+            elif not hasattr(partner_find, 'IE') and hasattr(partner_find, 'CNPJ'):
                 partner['indicador_ie_dest'] = '9'
 
-            if hasattr(emit, 'xFant'):
-                partner['legal_name'] = emit.xFant
+            if hasattr(partner_find, 'xFant'):
+                partner['legal_name'] = partner_find.xFant
             else:
-                partner['legal_name'] = emit.xNome
+                partner['legal_name'] = partner_find.xNome
 
-            if hasattr(emit, 'fone'):
-                partner['phone'] = emit.enderEmit.fone
+            if hasattr(partner_find, 'fone'):
+                partner['phone'] = partner_find.enderEmit.fone
 
-            if hasattr(emit, 'xCpl'):
-                partner['street2'] = emit.enderEmit.xCpl
+            if hasattr(partner_find, 'xCpl'):
+                partner['street2'] = partner_find.enderEmit.xCpl
 
-            partner['zip'] = emit.enderEmit.CEP
+            partner['zip'] = partner_find.enderEmit.CEP
             partner['default_supplier'] = 'supplier'
-            partner['street'] = emit.enderEmit.xLgr
-            partner['number'] = emit.enderEmit.nro
-            partner['district'] = emit.enderEmit.xBairro
+            partner['street'] = partner_find.enderEmit.xLgr
+            partner['number'] = partner_find.enderEmit.nro
+            partner['district'] = partner_find.enderEmit.xBairro
             partner['city_id'] = city.id
             partner['state_id'] = city.state_id.id
             partner['country_id'] = self.env.ref('base.br').id
