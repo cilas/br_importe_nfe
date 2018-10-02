@@ -21,7 +21,7 @@ class WizardProdutos(models.TransientModel):
     uom_ext = fields.Many2one(
         'product.uom', string=u'Unidade Medida do XML', states=STATE)
     ncm = fields.Many2one(
-        'product.fiscal.classification', string=u'Unidade Medida do XML', states=STATE)
+        'product.fiscal.classification', string=u'NCM', states=STATE)
 
 
 class WizardImportNfe(models.TransientModel):
@@ -36,7 +36,6 @@ class WizardImportNfe(models.TransientModel):
                                       string='Forma de Pagamento')
     wizard_produtos = fields.Many2many('wizard.produtos', string="Produtos Nota Fiscal")
     confirma = fields.Boolean(string='Confirmar')
-    altera = fields.Boolean(string='Alterar')
 
     @api.multi
     def action_import_nfe_purchase(self):
@@ -231,12 +230,12 @@ class WizardImportNfe(models.TransientModel):
             'target': 'new',
         }
 
-    def criar_fatura(self, purchase_order, nfe):
-        invoice = self.env['account.invoice']
+    def criar_fatura(self, purchase_order, total, itens):
+        invoice_env = self.env['account.invoice']
         ipi_base = 0.0
         pis_base = 0.0
         confins_base = 0.0
-        for item in nfe.NFe.infNFe.det:
+        for item in itens:
             if hasattr(item.imposto, 'IPI') and hasattr(item.imposto.IPI, 'IPITrib'):
                 ipi_base += item.imposto.IPI.IPITrib.vBC
             if hasattr(item.imposto, 'PIS') and hasattr(item.imposto.PIS, 'PISAliq'):
@@ -263,18 +262,20 @@ class WizardImportNfe(models.TransientModel):
             currency_id=purchase_order.currency_id,  # Moeda a ser usada
             total_bruto=purchase_order.total_bruto,
             total_desconto=purchase_order.total_desconto,
-            icms_base=nfe.NFe.infNFe.total.ICMSTot.vBC,
-            icms_value=nfe.NFe.infNFe.total.ICMSTot.vICMS,
-            icms_st_base=nfe.NFe.infNFe.total.ICMSTot.vBCST,
-            icms_st_value=nfe.NFe.infNFe.total.ICMSTot.vST,
+            icms_base=total.ICMSTot.vBC,
+            icms_value=total.ICMSTot.vICMS,
+            icms_st_base=total.ICMSTot.vBCST,
+            icms_st_value=total.ICMSTot.vST,
             ipi_base=ipi_base,
-            ipi_value=nfe.NFe.infNFe.total.ICMSTot.vIPI,
+            ipi_value=total.ICMSTot.vIPI,
             pis_base=pis_base,
-            pis_value=nfe.NFe.infNFe.total.ICMSTot.vPIS,
+            pis_value=total.ICMSTot.vPIS,
             cofins_base=confins_base,
-            cofins_value=nfe.NFe.infNFe.total.ICMSTot.vCOFINS,
-            icms_des_value=nfe.NFe.infNFe.total.ICMSTot.vICMSDeson,
+            cofins_value=total.ICMSTot.vCOFINS,
+            icms_des_value=total.ICMSTot.vICMSDeson,
         )
+        invoice = invoice_env.create(invoice_dict)
+        return invoice
 
     def get_partner(self, partner_find, create=False, custumer=False, supplier=False):
         partner_doc = partner_find.CNPJ if hasattr(partner_find, 'CNPJ') else partner_find.CPF
