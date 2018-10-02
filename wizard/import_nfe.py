@@ -134,6 +134,7 @@ class WizardImportNfe(models.TransientModel):
             'list_price': preco_unitario,
             'purchase_method': 'receive'
         }
+
         # Verificando se a unidade medida interna foi informada
         if produto_wizard.uom_int:
             vals['product_uom_xml_id'] = produto_wizard.uom_int.id
@@ -194,7 +195,7 @@ class WizardImportNfe(models.TransientModel):
                 product_create['product_id'] = product_find.id
 
             pf_ids = self.env['product.fiscal.classification'].search([('code', '=', item.prod.NCM)])
-            if pf_ids.count == 1:
+            if len(pf_ids) == 1:
                 product_create['ncm'] = pf_ids.id
         return self.env['wizard.produtos'].create(product_create)
 
@@ -230,8 +231,8 @@ class WizardImportNfe(models.TransientModel):
             'target': 'new',
         }
 
-    @staticmethod
-    def criar_fatura(purchase_order, nfe):
+    def criar_fatura(self, purchase_order, nfe):
+        invoice = self.env['account.invoice']
         ipi_base = 0.0
         pis_base = 0.0
         confins_base = 0.0
@@ -272,6 +273,7 @@ class WizardImportNfe(models.TransientModel):
             pis_value=nfe.NFe.infNFe.total.ICMSTot.vPIS,
             cofins_base=confins_base,
             cofins_value=nfe.NFe.infNFe.total.ICMSTot.vCOFINS,
+            icms_des_value=nfe.NFe.infNFe.total.ICMSTot.vICMSDeson,
         )
 
     def get_partner(self, partner_find, create=False, custumer=False, supplier=False):
