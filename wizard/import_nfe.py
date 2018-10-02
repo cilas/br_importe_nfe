@@ -70,7 +70,7 @@ class WizardImportNfe(models.TransientModel):
             date_planned=self.retorna_data(nfe.NFe.infNFe.ide.dhEmi),
             date_order=self.retorna_data(nfe.NFe.infNFe.ide.dhEmi),
             payment_term_id=self.payment_term_id.id,
-            fiscal_position_id=self.fiscal_position_id.id,
+            fiscal_position_id=self.fiscal_position_id.id if self.fiscal_position_id else False,
             partner_ref=nfe.NFe.infNFe.ide.nNF,
             nfe_num=nfe.NFe.infNFe.ide.nNF,
             nfe_emissao=self.retorna_data(nfe.NFe.infNFe.ide.dhEmi),
@@ -105,7 +105,8 @@ class WizardImportNfe(models.TransientModel):
         # Vamos alterar inserir os itens criados na nota
         nota_dict = {'order_line': items}
         nota.write(nota_dict)
-        raise UserError(nota._compute_tax_id())
+        nota._compute_tax_id()
+
 
     @staticmethod
     def arruma_cpf_cnpj(partner_doc):
