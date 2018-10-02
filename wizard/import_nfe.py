@@ -388,7 +388,7 @@ class WizardImportNfe(models.TransientModel):
                         'product_uom': produto.uom_int.id,
                         'order_id': order.id,
                         'partner_id': order.partner_id.id,
-                        'product_qty_xml': float(quantidade),
+                        'qty_invoiced': prod.prod.qCom,
                         'product_uom_xml': produto.uom_ext.id,
                         'cfop_id': cfop.id,
                         'valor_bruto': prod.prod.vProd,
