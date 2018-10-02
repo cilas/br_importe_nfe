@@ -29,6 +29,7 @@
                                     <field name="fator"/>
                                     <field name="uom_ext"/>
                                     <field name="uom_int"/>
+                                    <field name="ncm"/>
                                 </group>
                             </form>
                             <tree string="Produtos não encontrados(deixe em branco para criar um novo)" editable="bottom">
@@ -37,6 +38,7 @@
                                 <field name="fator"/>
                                 <field name="uom_ext"/>
                                 <field name="uom_int"/>
+                                <field name="ncm"/>
                             </tree>
                         </field>
                     </group>

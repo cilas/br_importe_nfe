@@ -20,6 +20,8 @@ class WizardProdutos(models.TransientModel):
         'product.uom', string=u'Unidade Medida do Estabelicmento', states=STATE)
     uom_ext = fields.Many2one(
         'product.uom', string=u'Unidade Medida do XML', states=STATE)
+    ncm = fields.Many2one(
+        'product.fiscal.classification', string=u'Unidade Medida do XML', states=STATE)
 
 
 class WizardImportNfe(models.TransientModel):
@@ -83,11 +85,17 @@ class WizardImportNfe(models.TransientModel):
             total_seguro=nfe.NFe.infNFe.total.ICMSTot.vSeg,
             total_frete=nfe.NFe.infNFe.total.ICMSTot.vFrete,
             picking_count=1,
+            amount_tax=(
+                    nfe.NFe.infNFe.total.ICMSTot.vICMS +
+                    nfe.NFe.infNFe.total.ICMSTot.vST +
+                    nfe.NFe.infNFe.total.ICMSTot.vIPI +
+                    nfe.NFe.infNFe.total.ICMSTot.vPIS +
+                    nfe.NFe.infNFe.total.ICMSTot.vCOFINS
+            ),
         )
 
         if hasattr(nfe.NFe.infNFe, 'infAdic') and hasattr(nfe.NFe.infNFe.infAdic, 'infCpl'):
             nota_dict['notes'] = nfe.NFe.infNFe.infAdic.infCpl.text
-
         nota = self.env['purchase.order'].create(nota_dict)
 
         # Cria os itens na nota
@@ -126,11 +134,17 @@ class WizardImportNfe(models.TransientModel):
             'list_price': preco_unitario,
             'purchase_method': 'receive'
         }
-
+        # Verificando se a unidade medida interna foi informada
         if produto_wizard.uom_int:
             vals['product_uom_xml_id'] = produto_wizard.uom_int.id
         else:
             raise UserError('A unidade medida interna do produto: ' + produto_wizard.name + ' é obrigatoria')
+
+        # Verificando se o ncm foi informado
+        if produto_wizard.ncm:
+            vals['product_uom_xml_id'] = produto_wizard.uom_int.id
+        else:
+            raise UserError('O NCM do produto: ' + produto_wizard.name + ' é obrigatorio')
 
         if hasattr(produto_xml, 'CEST'):
             vals['cest'] = produto_xml.CEST
@@ -140,8 +154,7 @@ class WizardImportNfe(models.TransientModel):
         else:
             vals['tracking'] = 'none'
 
-        pf_ids = self.env['product.fiscal.classification'].search([('code', '=', produto_xml.NCM)])
-        vals['fiscal_classification_id'] = pf_ids.id
+        vals['fiscal_classification_id'] = produto_wizard.ncm.id
         product_id = self.env['product.product'].create(vals)
         return product_id
 
@@ -180,6 +193,9 @@ class WizardImportNfe(models.TransientModel):
             if product_find:
                 product_create['product_id'] = product_find.id
 
+            pf_ids = self.env['product.fiscal.classification'].search([('code', '=', item.prod.NCM)])
+            if pf_ids.count == 1:
+                product_create['ncm'] = pf_ids.id
         return self.env['wizard.produtos'].create(product_create)
 
     def checa_produtos(self):
@@ -214,14 +230,49 @@ class WizardImportNfe(models.TransientModel):
             'target': 'new',
         }
 
-    def criar_fatura(self, purchase_order):
-        invoice_dict = {
-            'origin': purchase_order.name,
-            'type': 'in_invoice',
-            'comment': u'FATURA GERADA AUTOMATICAMENTE ATRAVES DE IMPORATACAO DE DOCUMENTO ELETRONICO\n'
-                       u'CHAVE DA NFE DE ORIGEM: ' + purchase_order.chave_nfe,
-            'fiscal_comment': purchase_order.notes,
-        }
+    @staticmethod
+    def criar_fatura(purchase_order, nfe):
+        ipi_base = 0.0
+        pis_base = 0.0
+        confins_base = 0.0
+        for item in nfe.NFe.infNFe.det:
+            if hasattr(item.imposto, 'IPI') and hasattr(item.imposto.IPI, 'IPITrib'):
+                ipi_base += item.imposto.IPI.IPITrib.vBC
+            if hasattr(item.imposto, 'PIS') and hasattr(item.imposto.PIS, 'PISAliq'):
+                pis_base += item.imposto.PIS.PISAliq.vBC
+            if hasattr(item.imposto, 'COFINS') and hasattr(item.imposto.COFINS, 'COFINSAliq'):
+                confins_base += item.imposto.COFINS.COFINSAliq.vBC
+
+        invoice_dict = dict(
+            origin=purchase_order.name,
+            type='in_invoice',
+            comment=u'FATURA GERADA AUTOMATICAMENTE ATRAVES DE IMPORATACAO DE DOCUMENTO ELETRONICO\n'
+                    u'CHAVE DA NFE DE ORIGEM: ' + purchase_order.chave_nfe,
+            fiscal_comment=purchase_order.notes,
+            state='open',
+            partner_id=purchase_order.partner_id.id,
+            commercial_partner_id=purchase_order.partner_id.id,
+            purchase_id=purchase_order.id,  # Pedido de Compras
+            date_invoice=purchase_order.date_order,  # Data de Emissao da NF-e
+            journal_id=2,  # Diário Contábil :TODO: CRIAR MODELO OPERACAO
+            account_id=13,  # Conta Contábil :TODO: CRIAR MODELO OPERACAO
+            amount_untaxed=purchase_order.amount_untaxed,  # VALORES TOTAIS DA INVOICE
+            amount_untaxed_signed=purchase_order.amount_untaxed,  # VALORES TOTAIS DA INVOICE
+            amount_tax=purchase_order.amount_tax,  # Total de Imposto
+            currency_id=purchase_order.currency_id,  # Moeda a ser usada
+            total_bruto=purchase_order.total_bruto,
+            total_desconto=purchase_order.total_desconto,
+            icms_base=nfe.NFe.infNFe.total.ICMSTot.vBC,
+            icms_value=nfe.NFe.infNFe.total.ICMSTot.vICMS,
+            icms_st_base=nfe.NFe.infNFe.total.ICMSTot.vBCST,
+            icms_st_value=nfe.NFe.infNFe.total.ICMSTot.vST,
+            ipi_base=ipi_base,
+            ipi_value=nfe.NFe.infNFe.total.ICMSTot.vIPI,
+            pis_base=pis_base,
+            pis_value=nfe.NFe.infNFe.total.ICMSTot.vPIS,
+            cofins_base=confins_base,
+            cofins_value=nfe.NFe.infNFe.total.ICMSTot.vCOFINS,
+        )
 
     def get_partner(self, partner_find, create=False, custumer=False, supplier=False):
         partner_doc = partner_find.CNPJ if hasattr(partner_find, 'CNPJ') else partner_find.CPF
@@ -359,41 +410,39 @@ class WizardImportNfe(models.TransientModel):
                         purchase_order_line_dict['icms_st_aliquota_reducao_base'] = icms.pRedBCST
 
                     # Configurando o IPI e suas particularidades
-                    if hasattr(prod.imposto.IPI.IPINT, 'CST'):
-                        purchase_order_line_dict['ipi_cst'] = prod.imposto.IPI.IPINT.CST
+                    if hasattr(prod.imposto, 'IPI'):
+                        if hasattr(prod.imposto.IPI, 'IPINT'):
+                            purchase_order_line_dict['ipi_cst'] = prod.imposto.IPI.IPINT.CST
+                        else:
+                            purchase_order_line_dict['ipi_cst'] = prod.imposto.IPI.IPITrib.CST
+                            # Vamos verificar a Constituição (art. 155, §2°, XI) e Lei Kandir (LC 87/96, art. 13, §2°)
+                            # Verificando se esse produto não vai ter ipi na base por Industrialização
+                            if hasattr(icms, 'vICMS') and icms.vICMS > 0 and \
+                                    dest.indIEDest == 1 and cfop.name.count("Industrialização") > 0:
+                                purchase_order_line_dict['incluir_ipi_base'] = False
 
-                    # Verificando se esse produto não vai ter ipi na base por Industrialização conforme
-                    # Constituição (art. 155, §2°, XI) e Lei Kandir (LC 87/96, art. 13, §2°)
-                    if hasattr(prod.imposto.IPI.IPINT, 'vIPI') and \
-                            hasattr(icms, 'vICMS') and \
-                            prod.imposto.IPI.IPINT.vIPI > 0 and \
-                            icms.vICMS > 0 and \
-                            dest.indIEDest == 1 and \
-                            cfop.name.count("Industrialização") > 0:
-                        purchase_order_line_dict['incluir_ipi_base'] = False
+                            # Verificando se esse produto não vai ter ipi na base por Comercialização
+                            elif hasattr(icms, 'vICMS') and icms.vICMS > 0 and \
+                                    dest.indIEDest == 1 and cfop.name.count("Comercialização") > 0:
+                                purchase_order_line_dict['incluir_ipi_base'] = False
 
-                    # Verificando se esse produto não vai ter ipi na base por Comercialização conforme
-                    # Constituição (art. 155, §2°, XI) e Lei Kandir (LC 87/96, art. 13, §2°)
-                    elif hasattr(prod.imposto.IPI.IPINT, 'vIPI') and \
-                            hasattr(icms, 'vICMS') and \
-                            prod.imposto.IPI.IPINT.vIPI > 0 and \
-                            icms.vICMS > 0 and \
-                            dest.indIEDest == 1 and \
-                            cfop.name.count("Comercialização") > 0:
-                        purchase_order_line_dict['incluir_ipi_base'] = False
-
-                    # Produto vai ter a ipi na base conforme
-                    # Constituição (art. 155, §2°, XI) e Lei Kandir (LC 87/96, art. 13, §2°)
-                    else:
-                        purchase_order_line_dict['incluir_ipi_base'] = True
+                            # Produto vai ter a ipi na base
+                            else:
+                                purchase_order_line_dict['incluir_ipi_base'] = True
 
                     # Configurando o pis
-                    if hasattr(prod.imposto.PIS.getchildren()[0], 'CST'):
-                        purchase_order_line_dict['pis_cst'] = prod.imposto.PIS.getchildren()[0].CST
+                    if hasattr(prod.imposto, 'PIS'):
+                        if hasattr(prod.imposto.PIS, 'PISAliq'):
+                            purchase_order_line_dict['pis_cst'] = prod.imposto.PIS.PISAliq.CST
+                        else:
+                            purchase_order_line_dict['pis_cst'] = prod.imposto.PIS.PISNT.CST
 
                     # Configurando o confins
-                    if hasattr(prod.imposto.COFINS.getchildren()[0], 'CST'):
-                        purchase_order_line_dict['cofins_cst'] = prod.imposto.COFINS.getchildren()[0].CST
+                    if hasattr(prod.imposto, 'COFINS'):
+                        if hasattr(prod.imposto.PIS, 'COFINSAliq'):
+                            purchase_order_line_dict['cofins_cst'] = prod.imposto.COFINS.COFINSAliq.CST
+                        else:
+                            purchase_order_line_dict['cofins_cst'] = prod.imposto.COFINS.COFINSNT.CST
 
                     if hasattr(prod.prod, 'vDesc'):
                         purchase_order_line_dict['valor_desconto'] = prod.prod.vDesc
