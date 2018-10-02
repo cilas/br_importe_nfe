@@ -46,12 +46,12 @@ class WizardImportNfe(models.TransientModel):
         if not hasattr(nfe, 'NFe'):
             raise UserError('Lamento, mas isso não é uma nota fiscal valida.')
 
-        company = self.get_partner(nfe.NFe.infNFe.dest)
+        company = self.get_partner(partner_find=nfe.NFe.infNFe.dest)
         if not company:
             raise UserError("Essa nota não é sua ou seu emitente não esta configurado corretamente.")
 
         # Carregando fornecedor / Criando
-        partner = self.get_partner(emit=nfe.NFe.infNFe.emit, create=True, supplier=True)
+        partner = self.get_partner(partner_find=nfe.NFe.infNFe.emit, create=True, supplier=True)
 
         # Verificando se a nota ja existe no sistema
         order = self.env['purchase.order'].search([
@@ -297,7 +297,7 @@ class WizardImportNfe(models.TransientModel):
         if not hasattr(nfe, 'NFe'):
             raise UserError('Lamento, mas isso não é uma nota fiscal valida.')
 
-        company = self.get_partner(nfe.NFe.infNFe.dest)
+        company = self.get_partner(partner_find=nfe.NFe.infNFe.dest)
         if not company:
             raise UserError("Essa nota não é sua ou seu emitente não esta configurado corretamente.")
 
