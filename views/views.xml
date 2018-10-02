@@ -12,12 +12,11 @@
             <field name="arch" type="xml">
                 <form string="Importar compra">
                     <group>
-                        <field name="nfe_xml"/>
-                        <field name="purchase_id" attrs="{'invisible':[('confirma','!=',False)]}"/>
-                        <field name="fiscal_position_id" domain="['|', ('fiscal_type', '=', None), ('fiscal_type', '=', 'entrada')]"/>
+                        <field name="nfe_xml" />
+                        <field name="purchase_id" attrs="{'invisible':[('confirma','!=',False)]}" />
+                        <field name="fiscal_position_id" domain="['|', ('fiscal_type', '=', None), ('fiscal_type', '=', 'entrada')]" />
                         <field name="payment_term_id" />
-                        <field name="confirma" readonly="1" attrs="{'invisible': True}"/>
-                        <button name="checa_produtos" string="Checar" type="object" attrs="{'invisible':[('confirma','!=',True)]}" />
+                        <field name="confirma" readonly="1" attrs="{'invisible': True}" />
                     </group>
                     <group>
                         <field name="wizard_produtos" mode="tree,kanban" attrs="{'invisible':[('confirma','!=',True)]}">
@@ -45,6 +44,8 @@
                         <button name="action_import_nfe_purchase"
                             string="Importar" type="object"
                             class="oe_highlight" attrs="{'invisible':[('confirma','!=',True)]}" />
+                        <button name="checa_produtos" string="Checar" type="object"
+                                attrs="{'invisible':[('confirma','!=',False)]}" />
                         <button string="Cancelar" special="cancel"/>
                     </footer>
                 </form>

@@ -2,7 +2,7 @@ import base64
 from lxml import objectify
 from datetime import datetime
 import logging
-from odoo import api, models, fields
+from odoo import api, models, fields, _
 from odoo.exceptions import UserError
 
 _logger = logging.getLogger(__name__)
@@ -47,9 +47,9 @@ class WizardImportNfe(models.TransientModel):
         if not hasattr(nfe, 'NFe'):
             raise UserError('Lamento, mas isso não é uma nota fiscal valida.')
 
-        company = self.get_partner(partner_find=nfe.NFe.infNFe.dest)
-        if not company:
-            raise UserError("Essa nota não é sua ou seu emitente não esta configurado corretamente.")
+        #company = self.get_partner(partner_find=nfe.NFe.infNFe.dest)
+        #if not company:
+        #    raise UserError("Essa nota não é sua ou seu emitente não esta configurado corretamente.")
 
         # Carregando fornecedor / Criando
         partner = self.get_partner(partner_find=nfe.NFe.infNFe.emit, create=True, supplier=True)
@@ -65,7 +65,7 @@ class WizardImportNfe(models.TransientModel):
         # Criando nota no sistema
         nota_dict = dict(
             partner_id=partner.id,
-            company_id=company.id,
+            company_id=1,
             date_approve=self.retorna_data(nfe.NFe.infNFe.ide.dhEmi),
             date_planned=self.retorna_data(nfe.NFe.infNFe.ide.dhEmi),
             date_order=self.retorna_data(nfe.NFe.infNFe.ide.dhEmi),
@@ -105,6 +105,7 @@ class WizardImportNfe(models.TransientModel):
         # Vamos alterar inserir os itens criados na nota
         nota_dict = {'order_line': items}
         nota.write(nota_dict)
+        raise UserError(nota._compute_tax_id())
 
     @staticmethod
     def arruma_cpf_cnpj(partner_doc):
@@ -207,9 +208,9 @@ class WizardImportNfe(models.TransientModel):
         if not hasattr(nfe, 'NFe'):
             raise UserError('Lamento, mas isso não é uma nota fiscal valida.')
 
-        company = self.get_partner(partner_find=nfe.NFe.infNFe.dest)
-        if not company:
-            raise UserError("Essa nota não é sua ou seu emitente não esta configurado corretamente.")
+        #company = self.get_partner(partner_find=nfe.NFe.infNFe.dest)
+        #if not company:
+        #    raise UserError("Essa nota não é sua ou seu emitente não esta configurado corretamente.")
 
         items = []
         for det in nfe.NFe.infNFe.det:
@@ -230,7 +231,7 @@ class WizardImportNfe(models.TransientModel):
             'target': 'new',
         }
 
-    def criar_fatura(self, purchase_order, total, itens):
+    def fatura(self, purchase_order, total, itens):
         invoice_env = self.env['account.invoice']
         ipi_base = 0.0
         pis_base = 0.0
@@ -276,6 +277,22 @@ class WizardImportNfe(models.TransientModel):
         )
         invoice = invoice_env.create(invoice_dict)
         return invoice
+
+    def itens_fatura(self, fatura, order):
+        for x in order.order_line:
+            item = dict(
+                purchase_line_id=order.id,
+                invoice_id=fatura.id,
+                account_id=24,
+                cfop_id=x.cfop.id,
+                name=x.product_id.name,
+                origin=x.order_id.name,
+                uom_id=x.product_uom.id,
+                product_id=x.product_id.id,
+                price_unit=x.price_unit,
+                price_subtotal=x.price_subtotal,
+                price_total=0
+            )
 
     def get_partner(self, partner_find, create=False, custumer=False, supplier=False):
         partner_doc = partner_find.CNPJ if hasattr(partner_find, 'CNPJ') else partner_find.CPF
@@ -331,6 +348,38 @@ class WizardImportNfe(models.TransientModel):
 
         return partner
 
+    def create_tax(self, tax, aliquota):
+        taxes = self.env['account.tax']
+        names = {
+            'icms': 'ICMS Entrada',
+            'icmsst': 'ICMS ST Entrada',
+            'ipi': 'IPI Entrada',
+            'pis': 'PIS Entrada',
+            'cofins': 'COFINS Entrada',
+        }
+        tax_id = taxes.search(
+            [
+                ('domain', '=', tax),
+                ('amount', '=', aliquota),
+                ('type_tax_use', '=', 'purchase'),
+                ('active', '=', True)
+            ]
+        )
+        if not tax_id:
+            tax_vals = dict(
+                name=names[tax] + ' ' + str(aliquota) + '%',
+                type_tax_use='purchase',
+                amount_type='icmsst' if tax == 'icmsst' else 'division',
+                price_include=True if tax not in ['icmsst', 'ipi'] else False,
+                amount=aliquota,
+                description=names[tax] + ' ' + str(aliquota) + '%',
+                tax_exigibility='on_invoice',
+                domain=tax,
+                active=True
+            )
+            tax_id = taxes.create(tax_vals)
+        return tax_id.id
+
     def purchase_order_line(self, order, itens, dest):
         # Variaveis uteis
         items = []
@@ -340,6 +389,7 @@ class WizardImportNfe(models.TransientModel):
         for produto in self.wizard_produtos:
             for prod in itens:
                 if produto.name == prod.prod.xProd:
+                    taxas = []
                     # Definindo variaveis de acordo com produto, pode muda com fator
                     quantidade = prod.prod.qCom
                     preco_unitario = prod.prod.vUnCom
@@ -388,7 +438,6 @@ class WizardImportNfe(models.TransientModel):
                         'product_uom': produto.uom_int.id,
                         'order_id': order.id,
                         'partner_id': order.partner_id.id,
-                        'qty_invoiced': prod.prod.qCom,
                         'product_uom_xml': produto.uom_ext.id,
                         'cfop_id': cfop.id,
                         'valor_bruto': prod.prod.vProd,
@@ -405,6 +454,7 @@ class WizardImportNfe(models.TransientModel):
 
                     if hasattr(icms, 'pICMS'):
                         purchase_order_line_dict['aliquota_icms_proprio'] = icms.pICMS
+                        taxas.append(self.create_tax(tax='icms', aliquota=icms.pICMS))
 
                     if hasattr(icms, 'pMVAST'):
                         purchase_order_line_dict['icms_st_aliquota_mva'] = icms.pMVAST
@@ -417,6 +467,7 @@ class WizardImportNfe(models.TransientModel):
                         if hasattr(prod.imposto.IPI, 'IPINT'):
                             purchase_order_line_dict['ipi_cst'] = prod.imposto.IPI.IPINT.CST
                         else:
+                            taxas.append(self.create_tax(tax='ipi', aliquota=prod.imposto.IPI.IPITrib.pIPI))
                             purchase_order_line_dict['ipi_cst'] = prod.imposto.IPI.IPITrib.CST
                             # Vamos verificar a Constituição (art. 155, §2°, XI) e Lei Kandir (LC 87/96, art. 13, §2°)
                             # Verificando se esse produto não vai ter ipi na base por Industrialização
@@ -437,6 +488,7 @@ class WizardImportNfe(models.TransientModel):
                     if hasattr(prod.imposto, 'PIS'):
                         if hasattr(prod.imposto.PIS, 'PISAliq'):
                             purchase_order_line_dict['pis_cst'] = prod.imposto.PIS.PISAliq.CST
+                            taxas.append(self.create_tax(tax='pis', aliquota=prod.imposto.PIS.PISAliq.pPIS))
                         else:
                             purchase_order_line_dict['pis_cst'] = prod.imposto.PIS.PISNT.CST
 
@@ -444,7 +496,8 @@ class WizardImportNfe(models.TransientModel):
                     if hasattr(prod.imposto, 'COFINS'):
                         if hasattr(prod.imposto.PIS, 'COFINSAliq'):
                             purchase_order_line_dict['cofins_cst'] = prod.imposto.COFINS.COFINSAliq.CST
-                        else:
+                            taxas.append(self.create_tax(tax='confins', aliquota=prod.imposto.PIS.COFINSAliq.pCOFINS))
+                        elif hasattr(prod.imposto.COFINS, 'COFINSNT'):
                             purchase_order_line_dict['cofins_cst'] = prod.imposto.COFINS.COFINSNT.CST
 
                     if hasattr(prod.prod, 'vDesc'):
@@ -459,7 +512,9 @@ class WizardImportNfe(models.TransientModel):
                     if hasattr(prod.prod, 'vFrete'):
                         purchase_order_line_dict['valor_frete'] = prod.prod.vFrete
 
+                    purchase_order_line_dict['taxes_id'] = [(6, _, taxas)]
                     purchase_order_line = self.env['purchase.order.line'].create(purchase_order_line_dict)
+
                     items.append((4, purchase_order_line.id, False))
                     cont += 1
 
