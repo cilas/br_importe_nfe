@@ -302,7 +302,7 @@ class WizardImportNfe(models.TransientModel):
         partner = self.env['res.partner'].search([
             ('cnpj_cpf', '=', partner_doc)])
 
-        # Empresa não encontrado, devemos criar ?
+        # Empresa não encontrada, devemos criar ?
         if not partner and create:
             # Ok, então vamos criar a empresa
             city = self.env['res.state.city'].search([('name', '=ilike', partner_find.enderEmit.xMun)])
